@@ -53,9 +53,6 @@
  *      fork(), execvp(), exit(), chdir()
  */
 
-/**
- * Trims leading and trailing whitespace from a string.
- */
 char *trim_whitespace(char *str)
 {
     while (isspace((unsigned char)*str))
@@ -65,8 +62,8 @@ char *trim_whitespace(char *str)
 
     char *end = str + strlen(str) - 1;
     while (end > str && isspace((unsigned char)*end))
-        end--;         // Trim trailing spaces
-    *(end + 1) = '\0'; // Null-terminate
+        end--;
+    *(end + 1) = '\0';
     return str;
 }
 
@@ -78,7 +75,7 @@ Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd)
     if (strcmp(cmd->argv[0], "cd") == 0)
     {
         if (cmd->argc == 1)
-            return OK; // Do nothing if no argument provided
+            return OK;
         if (chdir(cmd->argv[1]) != 0)
         {
             perror("cd");
@@ -89,6 +86,9 @@ Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd)
     return BI_NOT_BI;
 }
 
+/**
+ * Parses the input command line into a list of commands, handling pipes.
+ */
 int build_cmd_list(char *cmd_line, command_list_t *clist)
 {
     memset(clist, 0, sizeof(command_list_t));
@@ -111,36 +111,34 @@ int build_cmd_list(char *cmd_line, command_list_t *clist)
         while (*arg_ptr)
         {
             while (isspace((unsigned char)*arg_ptr))
-                arg_ptr++; // Skip leading spaces
+                arg_ptr++;
 
             if (*arg_ptr == '"' || *arg_ptr == '\'')
             {
-                // Handle quoted argument
                 char quote = *arg_ptr++;
                 char *start = arg_ptr;
                 while (*arg_ptr && *arg_ptr != quote)
                     arg_ptr++;
 
                 if (*arg_ptr == quote)
-                    *arg_ptr++ = '\0'; // Remove closing quote
+                    *arg_ptr++ = '\0';
 
                 cmd_buff->argv[cmd_buff->argc++] = start;
             }
             else
             {
-                // Handle normal argument
                 char *start = arg_ptr;
                 while (*arg_ptr && !isspace((unsigned char)*arg_ptr))
                     arg_ptr++;
 
                 if (*arg_ptr)
-                    *arg_ptr++ = '\0'; // Null-terminate argument
+                    *arg_ptr++ = '\0';
 
                 cmd_buff->argv[cmd_buff->argc++] = start;
             }
         }
 
-        cmd_buff->argv[cmd_buff->argc] = NULL; // Null-terminate args
+        cmd_buff->argv[cmd_buff->argc] = NULL;
         cmd_count++;
     }
 
@@ -148,17 +146,14 @@ int build_cmd_list(char *cmd_line, command_list_t *clist)
     return OK;
 }
 
-/**
- * Handles input (<) and output (>, >>) redirection.
- */
 void handle_redirection(cmd_buff_t *cmd)
 {
     int in_fd = -1, out_fd = -1;
+    int new_argc = 0;
 
-    // Scan for redirection operators
     for (int i = 0; i < cmd->argc; i++)
     {
-        if (strcmp(cmd->argv[i], "<") == 0)
+        if (strcmp(cmd->argv[i], "<") == 0 && i + 1 < cmd->argc)
         {
             in_fd = open(cmd->argv[i + 1], O_RDONLY);
             if (in_fd == -1)
@@ -166,9 +161,9 @@ void handle_redirection(cmd_buff_t *cmd)
                 perror("Failed to open input file");
                 exit(EXIT_FAILURE);
             }
-            cmd->argv[i] = NULL;
+            i++; // Skip the filename argument
         }
-        else if (strcmp(cmd->argv[i], ">") == 0)
+        else if (strcmp(cmd->argv[i], ">") == 0 && i + 1 < cmd->argc)
         {
             out_fd = open(cmd->argv[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (out_fd == -1)
@@ -176,9 +171,9 @@ void handle_redirection(cmd_buff_t *cmd)
                 perror("Failed to open output file");
                 exit(EXIT_FAILURE);
             }
-            cmd->argv[i] = NULL;
+            i++; // Skip the filename argument
         }
-        else if (strcmp(cmd->argv[i], ">>") == 0)
+        else if (strcmp(cmd->argv[i], ">>") == 0 && i + 1 < cmd->argc)
         {
             out_fd = open(cmd->argv[i + 1], O_WRONLY | O_CREAT | O_APPEND, 0644);
             if (out_fd == -1)
@@ -186,25 +181,38 @@ void handle_redirection(cmd_buff_t *cmd)
                 perror("Failed to open output file");
                 exit(EXIT_FAILURE);
             }
-            cmd->argv[i] = NULL;
+            i++; // Skip the filename argument
+        }
+        else
+        {
+            cmd->argv[new_argc++] = cmd->argv[i];
         }
     }
 
+    cmd->argv[new_argc] = NULL;
+    cmd->argc = new_argc;
+
     if (in_fd != -1)
     {
-        dup2(in_fd, STDIN_FILENO);
+        if (dup2(in_fd, STDIN_FILENO) == -1)
+        {
+            perror("Failed to redirect input");
+            exit(EXIT_FAILURE);
+        }
         close(in_fd);
     }
+
     if (out_fd != -1)
     {
-        dup2(out_fd, STDOUT_FILENO);
+        if (dup2(out_fd, STDOUT_FILENO) == -1)
+        {
+            perror("Failed to redirect output");
+            exit(EXIT_FAILURE);
+        }
         close(out_fd);
     }
 }
 
-/**
- * Executes a single command.
- */
 int exec_command(cmd_buff_t *cmd)
 {
     Built_In_Cmds built_in_status = exec_built_in_cmd(cmd);
@@ -213,20 +221,22 @@ int exec_command(cmd_buff_t *cmd)
         return OK;
     }
 
-    // Handle redirection before forking
-    handle_redirection(cmd);
-
     pid_t pid = fork();
     if (pid == 0)
     {
+        handle_redirection(cmd);
         execvp(cmd->argv[0], cmd->argv);
-        perror("execvp");
-        exit(EXIT_FAILURE);
+        perror("execvp"); 
+        exit(1);
     }
     else if (pid > 0)
     {
         int status;
         waitpid(pid, &status, 0);
+        if (WIFEXITED(status))
+        {
+            return WEXITSTATUS(status); // Properly return the child’s exit status
+        }
     }
     else
     {
@@ -234,16 +244,21 @@ int exec_command(cmd_buff_t *cmd)
         return ERR_EXEC_CMD;
     }
 
-    return OK;
+    return ERR_EXEC_CMD;
 }
 
 int execute_pipeline(command_list_t *clist)
 {
+    if (clist->num > CMD_MAX)
+    {
+        fprintf(stderr, "error: piping limited to %d commands\n", CMD_MAX);
+        return 1; // Exit with failure status
+    }
+
     int num_cmds = clist->num;
     int pipes[2 * (num_cmds - 1)];
     pid_t pids[num_cmds];
 
-    // Create pipes
     for (int i = 0; i < num_cmds - 1; i++)
     {
         if (pipe(pipes + i * 2) == -1)
@@ -253,7 +268,6 @@ int execute_pipeline(command_list_t *clist)
         }
     }
 
-    // Fork and execute commands
     for (int i = 0; i < num_cmds; i++)
     {
         pids[i] = fork();
@@ -264,47 +278,41 @@ int execute_pipeline(command_list_t *clist)
         }
 
         if (pids[i] == 0)
-        { // Child process
+        {
             if (i > 0)
-            { // If not the first command, read from previous pipe
+            {
                 dup2(pipes[(i - 1) * 2], STDIN_FILENO);
             }
             if (i < num_cmds - 1)
-            { // If not the last command, write to next pipe
+            {
                 dup2(pipes[i * 2 + 1], STDOUT_FILENO);
             }
 
-            // Close all pipes in child
             for (int j = 0; j < 2 * (num_cmds - 1); j++)
             {
                 close(pipes[j]);
             }
 
-            // Ensure execvp receives the correct argument list
             execvp(clist->commands[i].argv[0], clist->commands[i].argv);
-            perror(CMD_ERR_EXECUTE);
-            exit(EXIT_FAILURE);
+            perror("execvp failed");
+            exit(127);
         }
     }
 
-    // Close all pipes in the parent process
     for (int i = 0; i < 2 * (num_cmds - 1); i++)
     {
         close(pipes[i]);
     }
 
-    // Wait for all child processes
+    int status = 0;
     for (int i = 0; i < num_cmds; i++)
     {
-        waitpid(pids[i], NULL, 0);
+        waitpid(pids[i], &status, 0);
     }
 
-    return OK;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : ERR_EXEC_CMD;
 }
 
-/**
- * Main shell loop: Reads, parses, and executes commands.
- */
 int exec_local_cmd_loop()
 {
     char cmd_buff[SH_CMD_MAX];
@@ -338,17 +346,24 @@ int exec_local_cmd_loop()
         if (result == ERR_TOO_MANY_COMMANDS)
         {
             printf(CMD_ERR_PIPE_LIMIT, CMD_MAX);
-            continue;
+            return 1; // Ensure the shell exits with an error status
         }
 
+        int status = 0;
         if (clist.num == 1)
         {
-            exec_command(&clist.commands[0]);
+            status = exec_command(&clist.commands[0]);
         }
         else
         {
-            execute_pipeline(&clist);
+            status = execute_pipeline(&clist);
+        }
+
+        if (status != 0)
+        {
+            return status; // Propagate error status correctly
         }
     }
     return 0;
 }
+
