@@ -440,4 +440,3 @@ int exec_local_cmd_loop()
     }
     return 0;
 }
-

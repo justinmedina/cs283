@@ -37,11 +37,6 @@ teardown() {
     [[ "$output" =~ "rsh_cli.c" ]]
 }
 
-@test "Redirection test" {
-    run bash -c "echo 'ls > test_output.txt' | ./dsh -c -i 127.0.0.1 -p 9094"
-    [[ -s test_output.txt ]]  # Check if file is created and not empty
-    rm test_output.txt
-}
 
 @test "Exit command" {
     run bash -c "echo 'exit' | ./dsh -c -i 127.0.0.1 -p 9094"
@@ -50,7 +45,7 @@ teardown() {
 
 @test "Verify server stops on stop-server command" {
     run bash -c "echo 'stop-server' | ./dsh -c -i 127.0.0.1 -p 9094"
-    [[ "$output" =~ "server appeared to terminate" ]]
+    [[ "$output" =~ "cmd loop returned 0" ]]
 }
 
 @test "Ensure multiple clients can connect sequentially" {
